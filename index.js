@@ -4,10 +4,22 @@ const transform = require('lodash/transform');
 const EventEmitter = require('events');
 const stopcock = require('stopcock');
 const got = require('got');
-const url = require('url');
+const { URL } = require('url');
 
 const pkg = require('./package');
 const resources = require('./resources');
+const {
+  ShopifyError,
+  ShopifyHttpError,
+  ShopifyGraphQLError,
+  decorateHttpError,
+  isShopifyError
+} = require('./errors');
+const {
+  verifyWebhook,
+  parseWebhookHeaders,
+  createWebhookHandler
+} = require('./webhook-utils');
 
 const retryableErrorCodes = new Set([
   'ETIMEDOUT',
@@ -166,12 +178,20 @@ Shopify.prototype.request = function request(uri, method, key, data, headers) {
   if (this.options.hooks) {
     options.hooks = { ...this.options.hooks };
     options.hooks.afterResponse = [afterResponse];
+    options.hooks.beforeError = [decorateHttpError];
 
     if (this.options.hooks.afterResponse) {
       options.hooks.afterResponse.push(...this.options.hooks.afterResponse);
     }
+
+    if (this.options.hooks.beforeError) {
+      options.hooks.beforeError.push(...this.options.hooks.beforeError);
+    }
   } else {
-    options.hooks = { afterResponse: [afterResponse] };
+    options.hooks = {
+      afterResponse: [afterResponse],
+      beforeError: [decorateHttpError]
+    };
   }
 
   if (data) {
@@ -197,7 +217,12 @@ Shopify.prototype.request = function request(uri, method, key, data, headers) {
 
     if (res.statusCode === 202 && res.headers['location']) {
       const retryAfter = res.headers['retry-after'] * 1000 || 0;
-      const { pathname, search } = url.parse(res.headers['location']);
+      const parsedLocation = new URL(
+        res.headers['location'],
+        `${this.baseUrl.protocol}//${this.baseUrl.hostname}`
+      );
+      const pathname = parsedLocation.pathname;
+      const search = parsedLocation.search;
 
       return delay(retryAfter).then(() => {
         const uri = { pathname, ...this.baseUrl };
@@ -211,7 +236,7 @@ Shopify.prototype.request = function request(uri, method, key, data, headers) {
     const data = key ? body[key] : body || {};
 
     if (res.headers.link) {
-      const link = parseLinkHeader(res.headers.link);
+      const link = parseLinkHeader(res.headers.link, this.baseUrl);
 
       if (link.next) {
         Object.defineProperties(data, {
@@ -295,8 +320,21 @@ Shopify.prototype.graphql = function graphql(data, variables) {
   };
 
   const maybeError = (res) => {
-    if (res.body && Array.isArray(res.body.errors)) {
-      throw new Error(res.body.errors[0].message);
+    if (
+      res.body &&
+      Array.isArray(res.body.errors) &&
+      res.body.errors.length > 0
+    ) {
+      const first = res.body.errors[0];
+      const err = new ShopifyGraphQLError(first.message, {
+        errors: res.body.errors,
+        locations: first.locations,
+        path: first.path,
+        extensions: first.extensions,
+        cost: res.body.extensions && res.body.extensions.cost,
+        response: res
+      });
+      throw err;
     }
 
     return res;
@@ -361,6 +399,11 @@ function decorateError(error) {
     error.locations = first.locations;
     error.path = first.path;
     error.extensions = first.extensions;
+    error.errors = error.response.body.errors;
+    Object.setPrototypeOf(error, ShopifyGraphQLError.prototype);
+    error.name = 'ShopifyGraphQLError';
+  } else {
+    decorateHttpError(error);
   }
 
   return error;
@@ -434,11 +477,12 @@ function calculateDelay(retryObject) {
  * Parses the `Link` header into an object.
  *
  * @param {String} header The field value of the header
+ * @param {Object} [baseUrl] Base URL config
  * @return {Object} The parsed header
  * @private
  */
-function parseLinkHeader(header) {
-  return header.split(',').reduce(reducer, {});
+function parseLinkHeader(header, baseUrl) {
+  return header.split(',').reduce((acc, cur) => reducer(acc, cur, baseUrl), {});
 }
 
 /**
@@ -447,12 +491,23 @@ function parseLinkHeader(header) {
  *
  * @param {Array} acc The accumulator
  * @param {Object} cur The current element being processed in the array
+ * @param {Object} [baseUrl] Base URL config
  * @return {Object} The accumulator
  * @private
  */
-function reducer(acc, cur) {
+function reducer(acc, cur, baseUrl) {
   const pieces = cur.trim().split(';');
-  const link = url.parse(pieces[0].trim().slice(1, -1), true);
+  const rawUrl = pieces[0].trim().slice(1, -1);
+  const base = baseUrl
+    ? `${baseUrl.protocol}//${baseUrl.hostname}`
+    : 'https://dummy.myshopify.com';
+  const parsed = new URL(rawUrl, base);
+  const query = Object.fromEntries(parsed.searchParams.entries());
+  const link = {
+    pathname: parsed.pathname,
+    search: parsed.search,
+    query
+  };
   const rel = pieces[1].trim().slice(4);
 
   if (rel === '"next"') acc.next = link;
@@ -471,5 +526,13 @@ function reducer(acc, cur) {
 function responseData(res) {
   return res.body.data;
 }
+
+Shopify.ShopifyError = ShopifyError;
+Shopify.ShopifyHttpError = ShopifyHttpError;
+Shopify.ShopifyGraphQLError = ShopifyGraphQLError;
+Shopify.isShopifyError = isShopifyError;
+Shopify.verifyWebhook = verifyWebhook;
+Shopify.parseWebhookHeaders = parseWebhookHeaders;
+Shopify.createWebhookHandler = createWebhookHandler;
 
 module.exports = Shopify;

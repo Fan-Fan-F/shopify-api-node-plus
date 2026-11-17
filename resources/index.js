@@ -9,6 +9,7 @@ const map = {
   asset: () => require('./asset'),
   balance: () => require('./balance'),
   blog: () => require('./blog'),
+  bulkOperation: () => require('./bulk-operation'),
   cancellationRequest: () => require('./cancellation-request'),
   carrierService: () => require('./carrier-service'),
   checkout: () => require('./checkout'),

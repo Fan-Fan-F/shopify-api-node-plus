@@ -1,812 +1,416 @@
-# Shopify API Node.js
+# shopify-api-node-plus
 
-[![Version npm][npm-shopify-api-node-badge]][npm-shopify-api-node]
-[![Build Status][ci-shopify-api-node-badge]][ci-shopify-api-node]
-[![Coverage Status][coverage-shopify-api-node-badge]][coverage-shopify-api-node]
+轻量、健壮且功能完备的 Shopify Node.js
+SDK 增强版。在原项目小而稳的基础上，完整补齐现代 Shopify 开发不可或缺的 GraphQL
+Bulk
+Operations（批量操作）、防时序攻击的 Webhook 验证中间件、结构化错误处理与 Node.js
+20+ WHATWG URL 标准化支持。
 
-Shopify API bindings for Node.js.
+An enhanced, robust, and feature-complete Shopify API client for Node.js. Built
+upon the lightweight foundation of the original library, fully upgraded with
+GraphQL Bulk Operations, timing-safe Webhook verification middleware, structured
+error normalization, and standard WHATWG URL compatibility for modern Node.js
+runtimes.
 
-## Installation:
+---
 
-```shell
-$ npm install --save shopify-api-node
+## 目录 / Table of Contents
+
+- [中文说明](#中文说明)
+  - [功能与改进点](#功能与改进点)
+  - [快速开始](#快速开始)
+  - [来源与致谢](#来源与致谢)
+  - [许可证](#许可证)
+- [English Documentation](#english-documentation)
+  - [Features & Enhancements](#features--enhancements)
+  - [Quick Start](#quick-start)
+  - [Source & Acknowledgments](#source--acknowledgments)
+  - [License](#license)
+
+---
+
+## 中文说明
+
+### 功能与改进点
+
+本项目基于 `MONEI/Shopify-api-node` 展开 A 路线二次开发，所有改动保持原有 API
+100% 向下兼容，逐条对应根目录 `CHANGES.md` 中的改进计划：
+
+1. **废弃 API 现代化升级（修复 `url.parse()`）**
+   - 原项目在 Link 分页头解析与 202 异步轮询中调用了 Node.js 官方已废弃的核心模块
+     `url.parse()`，在 Node.js 20+ 环境运行时频繁产生
+     `[DEP0169] DeprecationWarning`。
+   - 全面迁移至标准 WHATWG `new URL()`
+     API，消除运行期警告并增强 URL 解析的鲁棒性与安全性。
+
+2. **完备的 Webhook 验签、头解析与中间件套件**
+   - 原项目仅支持 Webhook 的 REST 增删查改订阅，缺乏生产应用接收 Webhook 所必须的验签逻辑。
+   - 新增 `shopify.webhook.verify` 与静态方法
+     `Shopify.verifyWebhook`，采用 Node.js 原生 `crypto.timingSafeEqual`
+     防范时序旁路攻击。
+   - 新增 `shopify.webhook.parseHeaders` 与
+     `Shopify.parseWebhookHeaders`，自动规范化提取 Shopify 专有请求头（topic、shop、webhook
+     ID、API 版本等）。
+   - 新增 `shopify.webhook.createHandler` 与
+     `Shopify.createWebhookHandler`，开箱即用兼容 Express、Connect 及 Node 原生 HTTP 服务。
+
+3. **全功能 GraphQL Bulk Operations（批量操作）支持**
+   - 彻底解决 REST API 在拉取/变更海量商品、订单时受限流严重、分页缓慢的痛点。
+   - 新增 `shopify.bulkOperation` 资源模块，提供
+     `runQuery`（提交批量查询）、`runMutation`（提交批量变更）、`getCurrent`（查询当前任务）、`get(id)`、`cancel(id)`。
+   - 内置 `poll(id, options)` 状态轮询助手与 `parseJsonl(data, options)`
+     解析器，支持从 Shopify 返回的 JSONL 数据中一键依据 `__parentId`
+     自动反归一化重构出商品-变体层级树状结构。
+
+4. **规范化结构化错误处理体系（Normalized Error Handling）**
+   - 解决原库 REST 报错直接抛出通用 `got.HTTPError`（消息仅为
+     `Response code 422...`，掩盖响应体内具体业务原因）的痛点。
+   - 提供 `ShopifyError`、`ShopifyHttpError` 与 `ShopifyGraphQLError`
+     错误层次，通过 Got 拦截钩子自动从响应提炼提取 `error.detail`（如
+     `title: can't be blank`）、`error.errors`、`error.statusCode`、`error.requestId`
+     以及限流统计 `error.rateLimit`。
+   - 保持原有 `err instanceof got.HTTPError`
+     继承链完全有效，既有业务代码零迁移成本。
+
+5. **扩展 TypeScript 类型声明与 Webhook 事件主题**
+   - 在 `types/index.d.ts` 中补全所有新增模块（`bulkOperation`、`webhook`
+     验证工具、结构化错误类）的完整类型定义。
+   - 补充 `WebhookTopic` 枚举，保持类型系统与最新 Shopify API 同步。
+
+---
+
+### 快速开始
+
+#### 1. 安装
+
+```bash
+npm install shopify-api-node-plus
+# 或者使用 npm 直接链接本地开发版本
 ```
 
-## API
+#### 2. 初始化客户端
 
-This module exports a constructor function which takes an options object.
+```javascript
+const Shopify = require('shopify-api-node-plus');
 
-### `Shopify(options)`
-
-Creates a new `Shopify` instance.
-
-#### Arguments
-
-- `options` - Required - A plain JavaScript object that contains the
-  configuration options.
-
-#### Options
-
-- `shopName` - Required - A string that specifies the shop name. The shop's
-  "myshopify.com" domain is also accepted.
-- `apiKey` - Required for [private][generate-private-app-credentials] apps - A
-  string that specifies the API key of the app. This option must be used in
-  conjunction with the `password` option and is mutually exclusive with the
-  `accessToken` option.
-- `password` - Required for [private][generate-private-app-credentials] apps - A
-  string that specifies the private app password. This option must be used in
-  conjunction with the `apiKey` option and is mutually exclusive with the
-  `accessToken` option.
-- `accessToken` - Required for public apps - A string representing the permanent
-  [OAuth 2.0][oauth] access token. This option is mutually exclusive with the
-  `apiKey` and `password` options. If you are looking for a premade solution to
-  obtain an access token, take a look at the [shopify-token][] module.
-- `agent` - Optional - An object that is passed as the `agent` option to `got`.
-  This allows to use a proxy server. See
-  [Got documentation](https://github.com/sindresorhus/got/tree/v11.8.6?tab=readme-ov-file#proxies)
-  for more details.
-- `apiVersion` - Optional - A string to specify the [Shopify API
-  version][api-versioning] to use for requests. Defaults to the oldest supported
-  stable version.
-- `autoLimit` - Optional - This option allows you to regulate the request rate
-  in order to avoid hitting the [rate limit][api-call-limit]. Requests are
-  limited using the token bucket algorithm. Accepted values are a boolean or a
-  plain JavaScript object. When using an object, the `calls` property and the
-  `interval` property specify the refill rate and the `bucketSize` property the
-  bucket size. For example `{ calls: 2, interval: 1000, bucketSize: 35 }`
-  specifies a limit of 2 requests per second with a burst of 35 requests. When
-  set to `true` requests are limited as specified in the above example. Defaults
-  to `false`. Mutually exclusive with the `maxRetries` option.
-- `hooks` - Optional - A list of `got`
-  [request hooks](https://github.com/sindresorhus/got/tree/v11.8.6#hooks) to
-  attach to all outgoing requests, like `beforeRetry`, `afterResponse`, etc.
-  Hooks should be provided in the same format that Got expects them and will
-  receive the same arguments Got passes unchanged.
-- `maxRetries` - Optional - The number of times to attempt to make the request
-  to Shopify before giving up. Defaults to `0`, which means no automatic
-  retries. If set to a value greater than `0`, `shopify-api-node` will make up
-  to that many retries. `shopify-api-node` will respect the `Retry-After` header
-  for requests to the REST API, and the throttled cost data for requests to the
-  GraphQL API, and retry the request after that time has elapsed. Mutually
-  exclusive with the `autoLimit` option.
-- `parseJson` - Optional - The function used to parse JSON. The function is
-  passed a single argument. This option allows the use of a custom JSON parser
-  that might be needed to properly handle long integer IDs. Defaults to
-  `JSON.parse()`.
-- `presentmentPrices` - Optional - Whether to include the header to pull
-  presentment prices for products. Defaults to `false`.
-- `stringifyJson` - Optional - The function used to serialize to JSON. The
-  function is passed a single argument. This option allows the use of a custom
-  JSON serializer that might be needed to properly handle long integer IDs.
-  Defaults to `JSON.stringify()`.
-- `timeout` - Optional - The number of milliseconds before the request times
-  out. If the request takes longer than `timeout`, it will be aborted. Defaults
-  to `60000`, or 1 minute.
-
-#### Return value
-
-A `Shopify` instance.
-
-#### Exceptions
-
-Throws an `Error` exception if the required options are missing.
-
-#### Example
-
-```js
-const Shopify = require('shopify-api-node');
-
+// 适用于公共应用 / 自定义应用（OAuth Access Token）
 const shopify = new Shopify({
+  shopName: 'your-shop-name', // 仅填写店铺名或 your-shop-name.myshopify.com
+  accessToken: 'shpat_your_access_token_placeholder',
+  apiVersion: '2024-01'
+});
+
+// 适用于私有应用（API Key + Password）
+const privateShopify = new Shopify({
   shopName: 'your-shop-name',
-  apiKey: 'your-api-key',
-  password: 'your-app-password'
+  apiKey: 'your_api_key_placeholder',
+  password: 'shppa_your_password_placeholder',
+  apiVersion: '2024-01'
 });
 ```
 
-### `shopify.callLimits`
+#### 3. 基础 REST 与 GraphQL 请求
 
-The `callLimits` property allows you to monitor the API call limit. The value is
-an object like this:
+```javascript
+async function example() {
+  // 1. REST 请求示例（获取商品列表）
+  const products = await shopify.product.list({ limit: 10 });
+  console.log(`获取到 ${products.length} 个商品`);
 
-```js
-{
-  remaining: 30,
-  current: 10,
-  max: 40
-}
-```
-
-Values start at `undefined` and are updated every time a request is made. After
-every update the `callLimits` event is emitted with the updated limits as
-argument.
-
-```js
-shopify.on('callLimits', (limits) => console.log(limits));
-```
-
-When using the GraphQL API, a different property is used to track the API call
-limit: `callGraphqlLimits`.
-
-Keep in mind that the `autoLimit` option is ignored while using GraphQL API.
-
-```js
-shopify.on('callGraphqlLimits', (limits) => console.log(limits));
-```
-
-## Resources
-
-Every resource is accessed via your `shopify` instance:
-
-```js
-const shopify = new Shopify({
-  shopName: 'your-shop-name',
-  accessToken: 'your-oauth-token'
-});
-
-// shopify.<resource_name>.<method_name>
-```
-
-Each method returns a `Promise` that resolves with the result:
-
-```js
-shopify.order
-  .list({ limit: 5 })
-  .then((orders) => console.log(orders))
-  .catch((err) => console.error(err));
-```
-
-The Shopify API requires that you send a valid JSON string in the request body
-including the name of the resource. For example, the request body to create a
-country should be:
-
-```json
-{
-  "country": {
-    "code": "FR",
-    "tax": 0.25
-  }
-}
-```
-
-When using `shopify-api-node` you don't have to specify the full object but only
-the nested one as the module automatically wraps the provided data. Using the
-above example this translates to:
-
-```js
-shopify.country
-  .create({ code: 'FR', tax: 0.25 })
-  .then((country) => console.log(country))
-  .catch((err) => console.error(err));
-```
-
-Similarly, the Shopify API includes the resource name in the JSON string that is
-returned in the response body:
-
-```json
-{
-  "country": {
-    "id": 1070231510,
-    "name": "France",
-    "tax": 0.2,
-    "code": "FR",
-    "tax_name": "TVA",
-    "provinces": []
-  }
-}
-```
-
-`shopify-api-node` automatically unwraps the parsed object and returns:
-
-```js
-{
-  id: 1070231510,
-  name: 'France',
-  tax: 0.2,
-  code: 'FR',
-  tax_name: 'TVA',
-  provinces: []
-}
-```
-
-This behavior is valid for all resources.
-
-## Metafields
-
-Shopify allows for adding metafields to various resources. You can use the
-`owner_resource` and `owner_id` properties to work with metafields that belong
-to a particular resource as shown in the examples below.
-
-Get metafields that belong to a product:
-
-```js
-shopify.metafield
-  .list({
-    metafield: { owner_resource: 'product', owner_id: 632910392 }
-  })
-  .then(
-    (metafields) => console.log(metafields),
-    (err) => console.error(err)
-  );
-```
-
-Create a new metafield for a product:
-
-```js
-shopify.metafield
-  .create({
-    key: 'warehouse',
-    value: 25,
-    type: 'integer',
-    namespace: 'inventory',
-    owner_resource: 'product',
-    owner_id: 632910392
-  })
-  .then(
-    (metafield) => console.log(metafield),
-    (err) => console.error(err)
-  );
-```
-
-## Pagination
-
-[Pagination][paginated-rest-results] in API version 2019-07 and above can be
-done as shown in the following example:
-
-```js
-(async () => {
-  let params = { limit: 10 };
-
-  do {
-    const products = await shopify.product.list(params);
-
-    console.log(products);
-
-    params = products.nextPageParameters;
-  } while (params !== undefined);
-})().catch(console.error);
-```
-
-Each set of results may have the `nextPageParameters` and
-`previousPageParameters` properties. These properties specify respectively the
-parameters needed to fetch the next and previous page of results.
-
-This feature is only available on version 2.24.0 and above.
-
-## Shopify rate limit avoidance
-
-`shopify-api-node` has two optional mechanisms for avoiding requests failing
-with `429 Rate Limit Exceeded` errors from Shopify.
-
-The `autoLimit` option implements a client side leaky bucket algorithm for
-delaying requests until Shopify is likely to accept them. When `autoLimit` is
-on, each `Shopify` instance will track how many requests have been made, and
-delay sending subsequent requests if the rate limit has been exceeded.
-`autoLimit` is very efficient because it almost entirely avoids sending requests
-which will return 429 errors, but, it does not coordinate between multiple
-`Shopify` instances or across multiple processes. If you're using
-`shopify-api-node` in many different processes, `autoLimit` will not correctly
-avoid 429 errors.
-
-The `maxRetries` option implements a retry based strategy for getting requests
-to Shopify, where when a 429 error occurs, the request is automatically retried
-after waiting. Shopify usually replies with a `Retry-After` header indicating to
-the client when the rate limit is available, and so `shopify-api-node` will wait
-that long before retrying. If you are using `shopify-api-node` in many different
-processes, they will all be competing to use the same rate limit shopify
-enforces, so there is no guarantee that retrying after the `Retry-After` header
-delay will work. It is recommended to set `maxRetries` to a high value like `10`
-if you are making many concurrent requests in many processes to ensure each
-request is retried for long enough to succeed.
-
-`autoLimit` and `maxRetries` can't be used simultaneously. Both are off by
-default.
-
-## Available resources and methods
-
-- accessScope
-  - `list()`
-- apiPermission
-  - `delete()`
-- applicationCharge
-  - `activate(id[, params])`
-  - `create(params)`
-  - `get(id[, params])`
-  - `list([params])`
-- applicationCredit
-  - `create(params)`
-  - `get(id[, params])`
-  - `list([params])`
-- article
-  - `authors()`
-  - `count(blogId[, params])`
-  - `create(blogId, params)`
-  - `delete(blogId, id)`
-  - `get(blogId, id[, params])`
-  - `list(blogId[, params])`
-  - `tags([blogId][, params])`
-  - `update(blogId, id, params)`
-- asset
-  - `create(themeId, params)`
-  - `delete(themeId, params)`
-  - `get(themeId, params)`
-  - `list(themeId[, params])`
-  - `update(themeId, params)`
-- balance
-  - `list()`
-  - `transactions([params])`
-- blog
-  - `count()`
-  - `create(params)`
-  - `delete(id)`
-  - `get(id[, params])`
-  - `list([params])`
-  - `update(id, params)`
-- cancellationRequest
-  - `accept(fulfillmentOrderId[, message])`
-  - `create(fulfillmentOrderId[, message])`
-  - `reject(fulfillmentOrderId[, message])`
-- carrierService
-  - `create(params)`
-  - `delete(id)`
-  - `get(id)`
-  - `list()`
-  - `update(id, params)`
-- checkout
-  - `complete(token)`
-  - `count([params])`
-  - `create(params)`
-  - `get(token)`
-  - `list([params])`
-  - `shippingRates(token)`
-  - `update(token, params)`
-- collect
-  - `count([params])`
-  - `create(params)`
-  - `delete(id)`
-  - `get(id[, params])`
-  - `list([params])`
-- collection
-  - `get(id[, params])`
-  - `products(id[, params])`
-- collectionListing
-  - `get(id)`
-  - `list([params])`
-  - `productIds(id[, params])`
-- comment
-  - `approve(id)`
-  - `count([params])`
-  - `create(params)`
-  - `get(id[, params])`
-  - `list([params])`
-  - `notSpam(id)`
-  - `remove(id)`
-  - `restore(id)`
-  - `spam(id)`
-  - `update(id, params)`
-- country
-  - `count()`
-  - `create(params)`
-  - `delete(id)`
-  - `get(id[, params])`
-  - `list([params])`
-  - `update(id, params)`
-- currency
-  - `list()`
-- customCollection
-  - `count([params])`
-  - `create(params)`
-  - `delete(id)`
-  - `get(id[, params])`
-  - `list([params])`
-  - `update(id, params)`
-- customer
-  - `accountActivationUrl(id)`
-  - `count([params])`
-  - `create(params)`
-  - `delete(id)`
-  - `get(id[, params])`
-  - `list([params])`
-  - `orders(id[, params])`
-  - `search(params)`
-  - `sendInvite(id[, params])`
-  - `update(id, params)`
-- customerAddress
-  - `create(customerId, params)`
-  - `default(customerId, id)`
-  - `delete(customerId, id)`
-  - `get(customerId, id)`
-  - `list(customerId[, params])`
-  - `set(customerId, params)`
-  - `update(customerId, id, params)`
-- customerSavedSearch
-  - `count([params])`
-  - `create(params)`
-  - `customers(id[, params])`
-  - `delete(id)`
-  - `get(id[, params])`
-  - `list([params])`
-  - `update(id, params)`
-- deprecatedApiCall
-  - `list()`
-- discountCode
-  - `create(priceRuleId, params)`
-  - `delete(priceRuleId, id)`
-  - `get(priceRuleId, id)`
-  - `list(priceRuleId)`
-  - `lookup(params)`
-  - `update(priceRuleId, id, params)`
-- discountCodeCreationJob
-  - `create(priceRuleId, params)`
-  - `discountCodes(priceRuleId, id)`
-  - `get(priceRuleId, id)`
-- dispute
-  - `get(id)`
-  - `list([params])`
-- disputeEvidence
-  - `get(disputeId)`
-  - `update(disputeId, params)`
-- disputeFileUpload
-  - `create(disputeId, params)`
-  - `delete(disputeId, id)`
-- draftOrder
-  - `complete(id[, params])`
-  - `count()`
-  - `create(params)`
-  - `delete(id)`
-  - `get(id[, params])`
-  - `list([params])`
-  - `sendInvoice(id[, params])`
-  - `update(id, params)`
-- event
-  - `count([params])`
-  - `get(id[, params])`
-  - `list([params])`
-- fulfillment
-  - `cancel(orderId, id)`
-  - `cancelV2(id)`
-  - `complete(orderId, id)`
-  - `count(orderId[, params)`
-  - `create(orderId, params)`
-  - `createV2(params)`
-  - `get(orderId, id[, params])`
-  - `list(orderId[, params])`
-  - `open(orderId, id)`
-  - `update(orderId, id, params)`
-  - `updateTracking(id, params)`
-- fulfillmentEvent
-  - `create(orderId, fulfillmentId, params)`
-  - `delete(orderId, fulfillmentId, id)`
-  - `get(orderId, fulfillmentId, id)`
-  - `list(orderId, fulfillmentId[, params])`
-  - `update(orderId, fulfillmentId, id, params)`
-- fulfillmentOrder
-  - `cancel(id)`
-  - `close(id[, message])`
-  - `fulfillments(id)`
-  - `get(id)`
-  - `hold(id, params)`
-  - `list([params])`
-  - `locationsForMove(id)`
-  - `move(id, locationId)`
-  - `releaseHold(id)`
-  - `reschedule(id, deadline)`
-  - `setFulfillmentOrdersDeadline(params)`
-- fulfillmentRequest
-  - `accept(fulfillmentOrderId[, message])`
-  - `create(fulfillmentOrderId, params)`
-  - `reject(fulfillmentOrderId[, message])`
-- fulfillmentService
-  - `create(params)`
-  - `delete(id)`
-  - `get(id)`
-  - `list([params])`
-  - `update(id, params)`
-- giftCard
-  - `count([params])`
-  - `create(params)`
-  - `disable(id)`
-  - `get(id)`
-  - `list([params])`
-  - `search(params)`
-  - `update(id, params)`
-- [giftCardAdjustment](https://shopify.dev/api/admin-rest/2022-04/resources/gift-card-adjustment)
-  - `create(giftCardId, params)`
-  - `get(giftCardId, id)`
-  - `list(giftCardId)`
-- inventoryItem
-  - `get(id)`
-  - `list(params)`
-  - `update(id, params)`
-- inventoryLevel
-  - `adjust(params)`
-  - `connect(params)`
-  - `delete(params)`
-  - `list(params)`
-  - `set(params)`
-- location
-  - `count`
-  - `get(id)`
-  - `inventoryLevels(id[, params])`
-  - `list()`
-- marketingEvent
-  - `count()`
-  - `create(params)`
-  - `delete(id)`
-  - `get(id)`
-  - `list([params])`
-  - `update(id, params)`
-  - `engagements(id, params)`
-- metafield
-  - `count([params])`
-  - `create(params)`
-  - `delete(id)`
-  - `get(id[, params])`
-  - `list([params])`
-  - `update(id, params)`
-- order
-  - `cancel(id[, params])`
-  - `close(id)`
-  - `count([params])`
-  - `create(params)`
-  - `delete(id)`
-  - `fulfillmentOrders(id)`
-  - `get(id[, params])`
-  - `list([params])`
-  - `open(id)`
-  - `update(id, params)`
-- orderRisk
-  - `create(orderId, params)`
-  - `delete(orderId, id)`
-  - `get(orderId, id)`
-  - `list(orderId)`
-  - `update(orderId, id, params)`
-- page
-  - `count([params])`
-  - `create(params)`
-  - `delete(id)`
-  - `get(id[, params])`
-  - `list([params])`
-  - `update(id, params)`
-- payment
-  - `count(checkoutToken)`
-  - `create(checkoutToken, params)`
-  - `get(checkoutToken, id)`
-  - `list(checkoutToken)`
-- payout
-  - `get(id)`
-  - `list([params])`
-- policy
-  - `list([params])`
-- priceRule
-  - `create(params)`
-  - `delete(id)`
-  - `get(id)`
-  - `list([params])`
-  - `update(id, params)`
-- product
-  - `count([params])`
-  - `create(params)`
-  - `delete(id)`
-  - `get(id[, params])`
-  - `list([params])`
-  - `update(id, params)`
-- productImage
-  - `count(productId[, params])`
-  - `create(productId, params)`
-  - `delete(productId, id)`
-  - `get(productId, id[, params])`
-  - `list(productId[, params])`
-  - `update(productId, id, params)`
-- productListing
-  - `count()`
-  - `create(productId[, params])`
-  - `delete(productId)`
-  - `get(productId)`
-  - `list([params])`
-  - `productIds([params])`
-- [productResourceFeedback](https://shopify.dev/api/admin-rest/2022-04/resources/product-resourcefeedback)
-  - `create(productId[, params])`
-  - `list(productId)`
-- productVariant
-  - `count(productId)`
-  - `create(productId, params)`
-  - `delete(productId, id)`
-  - `get(id[, params])`
-  - `list(productId[, params])`
-  - `update(id, params)`
-- province
-  - `count(countryId[, params])`
-  - `get(countryId, id[, params])`
-  - `list(countryId[, params])`
-  - `update(countryId, id, params)`
-- recurringApplicationCharge
-  - `activate(id, params)`
-  - `create(params)`
-  - `delete(id)`
-  - `get(id[, params])`
-  - `list([params])`
-  - `customize(id, params)`
-- redirect
-  - `count([params])`
-  - `create(params)`
-  - `delete(id)`
-  - `get(id[, params])`
-  - `list([params])`
-  - `update(id, params)`
-- refund
-  - `calculate(orderId, params)`
-  - `create(orderId, params)`
-  - `get(orderId, id[, params])`
-  - `list(orderId[, params])`
-- report
-  - `create(params)`
-  - `delete(id)`
-  - `get(id[, params])`
-  - `list([params])`
-  - `update(id, params)`
-- resourceFeedback
-  - `create(params)`
-  - `list()`
-- scriptTag
-  - `count([params])`
-  - `create(params)`
-  - `delete(id)`
-  - `get(id[, params])`
-  - `list([params])`
-  - `update(id, params)`
-- shippingZone
-  - `list([params])`
-- shop
-  - `get([params])`
-- smartCollection
-  - `count([params])`
-  - `create(params)`
-  - `delete(id)`
-  - `get(id[, params])`
-  - `list([params])`
-  - `order(id, params)`
-  - `products(id[, params])`
-  - `update(id, params)`
-- storefrontAccessToken
-  - `create(params)`
-  - `delete(id)`
-  - `list()`
-- tenderTransaction
-  - `list([params])`
-- theme
-  - `create(params)`
-  - `delete(id)`
-  - `get(id[, params])`
-  - `list([params])`
-  - `update(id, params)`
-- transaction
-  - `count(orderId)`
-  - `create(orderId, params)`
-  - `get(orderId, id[, params])`
-  - `list(orderId[, params])`
-- usageCharge
-  - `create(recurringApplicationChargeId, params)`
-  - `get(recurringApplicationChargeId, id[, params])`
-  - `list(recurringApplicationChargeId[, params])`
-- user
-  - `current()`
-  - `get(id)`
-  - `list()`
-- webhook
-  - `count([params])`
-  - `create(params)`
-  - `delete(id)`
-  - `get(id[, params])`
-  - `list([params])`
-  - `update(id, params)`
-
-where `params` is a plain JavaScript object. See the [Rest Admin API
-reference][reading-api-docs] for parameters details.
-
-## GraphQL
-
-The `shopify` instance also allows to use the GraphQL API through the `graphql`
-method, which returns a promise that resolves with the result data:
-
-```js
-const shopify = new Shopify({
-  shopName: 'your-shop-name',
-  accessToken: 'your-oauth-token'
-});
-
-const query = `{
-  customers(first: 5) {
-    edges {
-      node {
-        displayName
-        totalSpent
+  // 2. 原生 GraphQL 请求示例
+  const result = await shopify.graphql(`
+    query {
+      shop {
+        id
+        name
+        myshopifyDomain
       }
     }
-  }
-}`;
-
-shopify
-  .graphql(query)
-  .then((customers) => console.log(customers))
-  .catch((err) => console.error(err));
+  `);
+  console.log('店铺信息:', result.shop.name);
+}
 ```
 
-## Hooks
+#### 4. GraphQL Bulk Operations 批量操作
 
-`shopify-api-node` supports being passed hooks which are called by `got` (the
-underlying HTTP library) during the request lifecycle.
+```javascript
+async function bulkExample() {
+  // 1. 发起批量查询操作
+  const bulkOp = await shopify.bulkOperation.runQuery(`
+    {
+      products {
+        edges {
+          node {
+            id
+            title
+            variants {
+              edges {
+                node {
+                  id
+                  title
+                  price
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  `);
+  console.log('批量操作已创建:', bulkOp.id, '当前状态:', bulkOp.status);
 
-For example, we can log every error that is encountered when using the
-`maxRetries` option:
+  // 2. 轮询直到操作完成
+  const completed = await shopify.bulkOperation.poll(bulkOp.id, {
+    interval: 2000,
+    timeout: 300000
+  });
+  console.log('批量任务完成，下载 URL:', completed.url);
 
-```js
+  // 3. 解析下载回来的 JSONL 数据（支持树状嵌套）
+  const rawJsonl =
+    '{"id":"gid://shopify/Product/1","title":"Demo"}\n{"id":"gid://shopify/ProductVariant/2","title":"Red","__parentId":"gid://shopify/Product/1"}';
+  const nestedProducts = shopify.bulkOperation.parseJsonl(rawJsonl, {
+    nest: true
+  });
+  console.log(
+    '嵌套反归一化商品:',
+    nestedProducts[0].title,
+    '变体数:',
+    nestedProducts[0].__children.length
+  );
+}
+```
+
+#### 5. Webhook 安全验证与中间件
+
+```javascript
+const express = require('express');
+const app = express();
+
+// 方式 A：在 Express 路由中使用中间件
+app.post(
+  '/api/webhooks',
+  shopify.webhook.createHandler({
+    secret: 'your_webhook_shared_secret',
+    onWebhook: (data, req, res) => {
+      console.log(`收到 Webhook [${data.topic}] 来自店铺 [${data.shop}]`);
+      console.log('负载内容:', data.body);
+      res.status(200).send('OK');
+    },
+    onError: (err, req, res) => {
+      console.error('Webhook 验签失败:', err.message);
+      res.status(401).send('Unauthorized');
+    }
+  })
+);
+
+// 方式 B：手动单点校验
+const isValid = Shopify.verifyWebhook(
+  rawRequestBody,
+  req.headers['x-shopify-hmac-sha256'],
+  'your_webhook_shared_secret'
+);
+```
+
+#### 6. 结构化错误捕获
+
+```javascript
+try {
+  await shopify.product.update(12345, { title: '' });
+} catch (err) {
+  // 原生属性与结构化增强属性并存
+  console.error('HTTP 状态码:', err.statusCode); // e.g. 422
+  console.error('Shopify 业务原因:', err.detail); // e.g. "title: can't be blank"
+  console.error('请求 RequestId:', err.requestId); // e.g. "req-abc-123"
+  console.error('调用频次统计:', err.rateLimit); // e.g. { current: 35, max: 40, remaining: 5 }
+}
+```
+
+---
+
+### 来源与致谢
+
+本项目基于 Shopify-api-node（https://github.com/MONEI/Shopify-api-node）二次开发，原项目由
+MONEI 以 MIT 许可证开源。
+
+---
+
+### 许可证
+
+本项目沿用原许可证，采用 MIT 许可证开源，全文见根目录 [LICENSE](LICENSE)。
+
+---
+
+## English Documentation
+
+### Features & Enhancements
+
+`shopify-api-node-plus` is a secondary development based on
+`MONEI/Shopify-api-node` (Route A). It retains 100% backward compatibility with
+the original API while addressing critical pain points documented in
+`CHANGES.md`:
+
+1. **Modern WHATWG URL Migration (Deprecated `url.parse()` Fixed)**
+   - Replaced legacy Node.js core `url.parse()` in Link header pagination and
+     202 async polling redirect handling.
+   - Completely resolves runtime `[DEP0169] DeprecationWarning` under Node.js
+     20+ and improves URL parsing security.
+
+2. **Comprehensive Webhook Verification & Middleware Suite**
+   - Original library only provided REST CRUD subscriptions without incoming
+     webhook verification tools.
+   - Added `shopify.webhook.verify` and `Shopify.verifyWebhook` using
+     `crypto.timingSafeEqual` to prevent timing attacks.
+   - Added `shopify.webhook.parseHeaders` and `Shopify.parseWebhookHeaders` for
+     standardized extraction of Shopify-specific headers (`topic`, `shop`,
+     `webhookId`, `apiVersion`).
+   - Added `shopify.webhook.createHandler` and `Shopify.createWebhookHandler`
+     compatible with Express, Connect, and vanilla Node HTTP servers.
+
+3. **Full-Featured GraphQL Bulk Operations**
+   - Overcomes REST API rate-limiting hurdles when managing vast catalogs and
+     high-volume order histories.
+   - Added `shopify.bulkOperation` resource module supporting `runQuery`,
+     `runMutation`, `getCurrent`, `get(id)`, and `cancel(id)`.
+   - Included `poll(id, options)` for asynchronous completion polling and
+     `parseJsonl(data, options)` with automatic hierarchy reconstruction via
+     `__parentId`.
+
+4. **Normalized & Structured Error Handling**
+   - Solves the long-standing developer pain point where `got.HTTPError`
+     conceals specific Shopify error messages behind generic `Response code 422`
+     texts.
+   - Introduced `ShopifyError`, `ShopifyHttpError`, and `ShopifyGraphQLError`
+     error hierarchies.
+   - Automatically populates `error.detail` (e.g. `title: can't be blank`),
+     `error.errors`, `error.statusCode`, `error.requestId`, and
+     `error.rateLimit` while maintaining 100% `instanceof got.HTTPError`
+     compatibility.
+
+5. **Expanded TypeScript Typings & Webhook Topics**
+   - Fully declared types for `bulkOperation`, webhook helpers, and normalized
+     error classes in `types/index.d.ts`.
+   - Updated `WebhookTopic` definitions to align with modern Shopify webhook
+     topics.
+
+---
+
+### Quick Start
+
+#### 1. Installation
+
+```bash
+npm install shopify-api-node-plus
+```
+
+#### 2. Client Initialization
+
+```javascript
+const Shopify = require('shopify-api-node-plus');
+
+// Public App / Custom App (OAuth Access Token)
 const shopify = new Shopify({
   shopName: 'your-shop-name',
-  accessToken: 'your-oauth-token',
-  maxRetries: 3,
-  // Pass the `beforeRetry` hook down to Got.
-  hooks: {
-    beforeRetry: [(options, error, retryCount) => console.error(error)]
-  }
+  accessToken: 'shpat_your_access_token_placeholder',
+  apiVersion: '2024-01'
+});
+
+// Private App (API Key + Password)
+const privateShopify = new Shopify({
+  shopName: 'your-shop-name',
+  apiKey: 'your_api_key_placeholder',
+  password: 'shppa_your_password_placeholder',
+  apiVersion: '2024-01'
 });
 ```
 
-For more information on the available `got` hooks, see the
-[`got` v11 hooks documentation](https://github.com/sindresorhus/got/tree/v11#hooks).
+#### 3. GraphQL Bulk Operations
 
-## Become a master of the Shopify ecosystem by:
+```javascript
+async function runBulkOperation() {
+  const operation = await shopify.bulkOperation.runQuery(`
+    {
+      products {
+        edges {
+          node {
+            id
+            title
+            variants {
+              edges {
+                node {
+                  id
+                  price
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  `);
 
-- [Talking To Other Masters][talking-to-other-masters]
-- [Reading API Docs][reading-api-docs]
-- [Learning from others][learning-from-others]
+  console.log('Initiated bulk operation:', operation.id);
 
-## Use Polaris, a React powered Frontend Framework which mimics the Shopify merchant admin:
+  const completed = await shopify.bulkOperation.poll(operation.id, {
+    interval: 2000,
+    timeout: 300000
+  });
 
-[Polaris][polaris]
+  console.log('Bulk operation completed. JSONL URL:', completed.url);
+}
+```
 
-## Shopify Apps already using Shopify API node:
+#### 4. Webhook Verification Middleware
 
-(add yours!)
+```javascript
+const express = require('express');
+const app = express();
 
-- [Sample Node Express app by Shopify][sample-node-express-app-by-shopify]
-- [Youtube Traffic][youtube-traffic]
-- [Shipatron][shipatron]
-- [UPC Code Manager][upc-code-manager]
-- [Shopify Passwordless Login][dimension-software]
+app.post(
+  '/api/webhooks',
+  shopify.webhook.createHandler({
+    secret: 'your_webhook_shared_secret',
+    onWebhook: (data, req, res) => {
+      console.log(`Received webhook for ${data.topic} on store ${data.shop}`);
+      res.status(200).send('OK');
+    },
+    onError: (err, req, res) => {
+      console.error('Invalid signature:', err.message);
+      res.status(401).send('Unauthorized');
+    }
+  })
+);
+```
 
-## Supported by:
+#### 5. Structured Error Handling
 
-[MONEI][monei]
+```javascript
+try {
+  await shopify.product.get(99999999);
+} catch (err) {
+  console.error('HTTP Status:', err.statusCode); // 404
+  console.error('Error Details:', err.detail); // "Not Found"
+  console.error('Shopify Request ID:', err.requestId); // e.g. "req-abc-123"
+  console.error('Call Limits:', err.rateLimit); // { current: 1, max: 40, remaining: 39 }
+}
+```
 
-## License
+---
 
-[MIT](LICENSE)
+### Source & Acknowledgments
 
-[sample-node-express-app-by-shopify]:
-  https://github.com/Shopify/shopify-node-app
-[npm-shopify-api-node-badge]: https://img.shields.io/npm/v/shopify-api-node.svg
-[npm-shopify-api-node]: https://www.npmjs.com/package/shopify-api-node
-[ci-shopify-api-node-badge]:
-  https://img.shields.io/github/actions/workflow/status/MONEI/Shopify-api-node/ci.yml?branch=master&label=CI
-[ci-shopify-api-node]:
-  https://github.com/MONEI/Shopify-api-node/actions?query=workflow%3ACI+branch%3Amaster
-[coverage-shopify-api-node-badge]:
-  https://img.shields.io/coveralls/MONEI/Shopify-api-node/master.svg
-[coverage-shopify-api-node]: https://coveralls.io/github/MONEI/Shopify-api-node
-[generate-private-app-credentials]:
-  https://shopify.dev/apps/auth/basic-http#step-2-generate-api-credentials
-[oauth]: https://shopify.dev/apps/auth/oauth
-[shopify-token]: https://github.com/lpinca/shopify-token
-[api-call-limit]: https://shopify.dev/api/usage/rate-limits
-[api-versioning]: https://shopify.dev/api/usage/versioning
-[talking-to-other-masters]: https://community.shopify.com/
-[reading-api-docs]: https://shopify.dev/api/admin-rest
-[learning-from-others]: https://stackoverflow.com/questions/tagged/shopify
-[paginated-rest-results]: https://shopify.dev/api/usage/pagination-rest
-[polaris]: https://polaris.shopify.com/?ref=microapps
-[monei]:
-  https://monei.com/?utm_source=shopify-api-node-module-repo-readme&utm_medium=click&utm_campaign=github
-[youtube-traffic]: https://apps.shopify.com/youtube-traffic?ref=microapps
-[shipatron]: https://shipatron.io
-[upc-code-manager]: https://apps.shopify.com/upc-code-manager-1
-[dimension-software]: https://login.dimensionsoftware.com
+本项目基于 Shopify-api-node（https://github.com/MONEI/Shopify-api-node）二次开发，原项目由
+MONEI 以 MIT 许可证开源。
+
+_(English: This project is a secondary development based on Shopify-api-node
+(https://github.com/MONEI/Shopify-api-node), originally open-sourced by MONEI
+under the MIT License.)_
+
+---
+
+### License
+
+沿用原许可证，全文见根目录 [LICENSE](LICENSE)。
+
+_(Licensed under the MIT License. See [LICENSE](LICENSE) for the complete
+text.)_

@@ -57,3 +57,23 @@ expectType<string>(product.title);
 
 const result = await client.graphql(`query { shop { id myshopify_domain } }`);
 expectType<any>(result);
+
+const bulkOp = await client.bulkOperation.runQuery('{ products }');
+expectType<Shopify.IBulkOperation>(bulkOp);
+expectType<string>(bulkOp.id);
+expectType<Shopify.BulkOperationStatus>(bulkOp.status);
+
+const currentBulk = await client.bulkOperation.getCurrent();
+expectType<Shopify.IBulkOperation | null>(currentBulk);
+
+const jsonlParsed = client.bulkOperation.parseJsonl('{}');
+expectType<any[]>(jsonlParsed);
+
+const isValidWebhook = client.webhook.verify('raw', 'hmac', 'secret');
+expectType<boolean>(isValidWebhook);
+
+const webhookHeaders = client.webhook.parseHeaders({});
+expectType<Shopify.IWebhookHeaders>(webhookHeaders);
+
+expectType<boolean>(Shopify.verifyWebhook('raw', 'hmac', 'secret'));
+expectType<boolean>(Shopify.isShopifyError(new Error()));

@@ -28,8 +28,21 @@ declare class Shopify {
   constructor(
     config: Shopify.IPublicShopifyConfig | Shopify.IPrivateShopifyConfig
   );
+  static verifyWebhook(
+    rawBody: string | Buffer,
+    hmacHeader: string,
+    secret: string
+  ): boolean;
+  static parseWebhookHeaders(
+    headers: Record<string, string | string[] | undefined>
+  ): Shopify.IWebhookHeaders;
+  static createWebhookHandler(
+    options?: Shopify.IWebhookHandlerOptions
+  ): (req: any, res: any, next?: any) => void;
+  static isShopifyError(error: any): boolean;
   callLimits: Shopify.ICallLimits;
   callGraphqlLimits: Shopify.ICallGraphqlLimits;
+  bulkOperation: Shopify.IBulkOperationResource;
   accessScope: {
     list: () => Promise<Shopify.IAccessScope[]>;
   };
@@ -773,6 +786,17 @@ declare class Shopify {
       id: number,
       params: Shopify.IUpdateWebhook
     ) => Promise<Shopify.IWebhook>;
+    verify: (
+      rawBody: string | Buffer,
+      hmacHeader: string,
+      secret?: string
+    ) => boolean;
+    parseHeaders: (
+      headers: Record<string, string | string[] | undefined>
+    ) => Shopify.IWebhookHeaders;
+    createHandler: (
+      options?: Shopify.IWebhookHandlerOptions
+    ) => (req: any, res: any, next?: any) => void;
   };
 }
 
@@ -780,6 +804,107 @@ declare class Shopify {
  *~ place them in this block.
  */
 declare namespace Shopify {
+  export class ShopifyError extends Error {
+    constructor(message: string);
+  }
+
+  export class ShopifyHttpError extends ShopifyError {
+    statusCode?: number;
+    status?: number;
+    requestId?: string;
+    rateLimit?: {
+      current: number;
+      max: number;
+      remaining: number;
+    };
+    errors?: any;
+    detail?: string;
+    response?: any;
+    request?: any;
+  }
+
+  export class ShopifyGraphQLError extends ShopifyError {
+    errors: any[];
+    locations?: Array<{ line: number; column: number }>;
+    path?: string[];
+    extensions?: any;
+    cost?: any;
+    response?: any;
+  }
+
+  export interface IWebhookHeaders {
+    topic?: string;
+    hmac?: string;
+    shop?: string;
+    apiVersion?: string;
+    webhookId?: string;
+  }
+
+  export interface IWebhookHandlerPayload {
+    topic?: string;
+    shop?: string;
+    webhookId?: string;
+    apiVersion?: string;
+    body: any;
+    rawBody: Buffer;
+    headers: IWebhookHeaders;
+  }
+
+  export interface IWebhookHandlerOptions {
+    secret?: string;
+    onWebhook?: (data: IWebhookHandlerPayload, req?: any, res?: any) => any;
+    onError?: (err: Error, req?: any, res?: any, next?: any) => any;
+  }
+
+  export type BulkOperationStatus =
+    | 'CREATED'
+    | 'RUNNING'
+    | 'COMPLETED'
+    | 'CANCELING'
+    | 'CANCELED'
+    | 'FAILED'
+    | 'EXPIRED';
+
+  export interface IBulkOperation {
+    id: string;
+    status: BulkOperationStatus;
+    errorCode?: string | null;
+    createdAt: string;
+    completedAt?: string | null;
+    objectCount: string;
+    fileSize?: string | null;
+    url?: string | null;
+    partialDataUrl?: string | null;
+  }
+
+  export interface IParseJsonlOptions {
+    nest?: boolean;
+  }
+
+  export interface IBulkOperationPollOptions {
+    interval?: number;
+    timeout?: number;
+  }
+
+  export interface IBulkOperationResource {
+    runQuery: (query: string) => Promise<IBulkOperation>;
+    runMutation: (
+      mutation: string,
+      stagedUploadPath: string
+    ) => Promise<IBulkOperation>;
+    getCurrent: (type?: 'QUERY' | 'MUTATION') => Promise<IBulkOperation | null>;
+    get: (id: string) => Promise<IBulkOperation | null>;
+    cancel: (id: string) => Promise<Pick<IBulkOperation, 'id' | 'status'>>;
+    parseJsonl: (
+      data: string | Buffer | null | undefined,
+      options?: IParseJsonlOptions
+    ) => any[];
+    poll: (
+      id?: string,
+      options?: IBulkOperationPollOptions
+    ) => Promise<IBulkOperation>;
+  }
+
   export interface IAutoLimit {
     bucketSize: number;
     calls: number;
@@ -943,11 +1068,7 @@ declare namespace Shopify {
   }
 
   type ApplicationChargeStatus =
-    | 'accepted'
-    | 'active'
-    | 'declined'
-    | 'expired'
-    | 'pending';
+    'accepted' | 'active' | 'declined' | 'expired' | 'pending';
 
   interface IApplicationCharge {
     confirmation_url: string;
@@ -1098,12 +1219,7 @@ declare namespace Shopify {
     | 'payout_cancellation';
 
   type BalanceTransactionSourceType =
-    | 'charge'
-    | 'refund'
-    | 'dispute'
-    | 'reserve'
-    | 'adjustment'
-    | 'payout';
+    'charge' | 'refund' | 'dispute' | 'reserve' | 'adjustment' | 'payout';
 
   interface IBalanceTransaction {
     id: number;
@@ -1661,10 +1777,7 @@ declare namespace Shopify {
   }
 
   type DraftOrderLineItemFulfullmentService =
-    | 'api'
-    | 'custom'
-    | 'legacy'
-    | 'manual';
+    'api' | 'custom' | 'legacy' | 'manual';
   type DraftOrderLineItemFulfullmentStatus = 'fulfilled' | 'partial';
 
   interface IDraftOrderLineItem {
@@ -1745,12 +1858,7 @@ declare namespace Shopify {
   }
 
   type IFulfillmentStatus =
-    | 'cancelled'
-    | 'error'
-    | 'failure'
-    | 'open'
-    | 'pending'
-    | 'success';
+    'cancelled' | 'error' | 'failure' | 'open' | 'pending' | 'success';
 
   interface IFulfillmentReceipt {
     textcase: boolean;
@@ -2057,10 +2165,7 @@ declare namespace Shopify {
   }
 
   type LineItemFulfillmentStatus =
-    | 'fulfilled'
-    | 'not_eligible'
-    | 'partial'
-    | null;
+    'fulfilled' | 'not_eligible' | 'partial' | null;
 
   interface ILineItemProperty {
     name: string;
@@ -2126,11 +2231,7 @@ declare namespace Shopify {
     | 'abandoned_cart'
     | 'receipt';
   type MarketingEventMarketingChannel =
-    | 'search'
-    | 'display'
-    | 'social'
-    | 'email'
-    | 'referral';
+    'search' | 'display' | 'social' | 'email' | 'referral';
   type MarketingEventBudgetType = 'daily' | 'lifetime';
 
   interface IMarketingEvent {
@@ -2192,11 +2293,7 @@ declare namespace Shopify {
   }
 
   type OrderCancelReason =
-    | 'customer'
-    | 'declined'
-    | 'fraud'
-    | 'inventory'
-    | 'other';
+    'customer' | 'declined' | 'fraud' | 'inventory' | 'other';
 
   interface IOrderClientDetails {
     accept_language: string | null;
@@ -2239,11 +2336,7 @@ declare namespace Shopify {
     | 'voided';
   type OrderFulfillmentStatus = 'fulfilled' | 'partial' | 'restocked' | null;
   type OrderProcessingMethod =
-    | 'checkout'
-    | 'direct'
-    | 'express'
-    | 'manual'
-    | 'offsite';
+    'checkout' | 'direct' | 'express' | 'manual' | 'offsite';
 
   interface IOrderDiscountCode {
     amount: string;
@@ -2439,12 +2532,7 @@ declare namespace Shopify {
     shipping_lines: IOrderShippingLine[];
     source_identifier: string | null;
     source_name:
-      | 'web'
-      | 'pos'
-      | 'shopify_draft_order'
-      | 'iphone'
-      | 'android'
-      | string;
+      'web' | 'pos' | 'shopify_draft_order' | 'iphone' | 'android' | string;
     subtotal_price: string;
     subtotal_price_set: IMoneySet;
     tags: string;
@@ -2962,11 +3050,7 @@ declare namespace Shopify {
   }
 
   export type SmartCollectionRuleTextColumn =
-    | 'title'
-    | 'tag'
-    | 'type'
-    | 'variant_title'
-    | 'vendor';
+    'title' | 'tag' | 'type' | 'variant_title' | 'vendor';
   export type SmartCollectionRuleTextRelation =
     | 'contains'
     | 'equals'
@@ -2980,16 +3064,12 @@ declare namespace Shopify {
     | 'variant_price'
     | 'variant_weight';
   export type TSmartCollectionRuleNumberRelation =
-    | 'equals'
-    | 'greater_than'
-    | 'less_than'
-    | 'not_equals';
+    'equals' | 'greater_than' | 'less_than' | 'not_equals';
 
   interface ISmartCollectionRule {
     column: SmartCollectionRuleTextColumn | SmartCollectionRuleNumberColumn;
     relation:
-      | SmartCollectionRuleTextRelation
-      | TSmartCollectionRuleNumberRelation;
+      SmartCollectionRuleTextRelation | TSmartCollectionRuleNumberRelation;
     condition: string;
   }
 
@@ -3085,11 +3165,7 @@ declare namespace Shopify {
     | 'pick_up_card'
     | 'processing_error';
   type TransactionKind =
-    | 'authorization'
-    | 'capture'
-    | 'refund'
-    | 'sale'
-    | 'void';
+    'authorization' | 'capture' | 'refund' | 'sale' | 'void';
   type TransactionStatus = 'error' | 'failure' | 'pending' | 'success';
 
   interface IExtendedAuthorizationAttributes {
@@ -3112,8 +3188,7 @@ declare namespace Shopify {
     device_id: number | null;
     error_code: TransactionErrorCode | null;
     extended_authorization_attributes?:
-      | IExtendedAuthorizationAttributes
-      | Record<string, never>;
+      IExtendedAuthorizationAttributes | Record<string, never>;
     gateway: string;
     id: number;
     kind: TransactionKind;
